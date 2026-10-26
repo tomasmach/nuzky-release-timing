@@ -1,0 +1,7 @@
+# Each plugins test resets the binary's shared data folder when its process starts.
+[test-groups]
+plugins = { max-threads = 1 }
+
+[[profile.default.overrides]]
+filter = 'binary(plugins)'
+test-group = 'plugins'

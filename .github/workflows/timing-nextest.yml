@@ -10,8 +10,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, ubuntu-24.04, macos-14]
+        os: [windows-2022, ubuntu-24.04]
         order: [test-first, nextest-first]
+        exclude:
+          - { os: ubuntu-24.04, order: test-first }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
@@ -49,7 +51,7 @@ jobs:
           curl --fail --location --silent --show-error --output "$RUNNER_TEMP/nextest.tar.gz" \
             "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/cargo-nextest-0.9.150-$asset"
           echo "$sha  $RUNNER_TEMP/nextest.tar.gz" | sha256sum --check
-          tar -xzf "$RUNNER_TEMP/nextest.tar.gz" -C "$HOME/.cargo/bin"
+          tar --force-local -xzf "$RUNNER_TEMP/nextest.tar.gz" -C "$HOME/.cargo/bin"
           cargo nextest --version
       - run: npm ci
       - run: node scripts/fetch-onnxruntime.mjs
@@ -62,6 +64,7 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = macOS ]; then export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"; fi
+          set +e
           t() { local s=$SECONDS; cargo test --workspace --locked --no-fail-fast > test.log 2>&1; echo "cargo test exit $? in $((SECONDS-s)) s"; grep -E 'test result: FAILED' -B2 test.log | grep Running || true; }
           n() { local s=$SECONDS; cargo nextest run --workspace --locked --no-fail-fast > nextest.log 2>&1; echo "nextest exit $? in $((SECONDS-s)) s"; grep -E '^\s+(FAIL|SIGSEGV|TIMEOUT|SLOW)' nextest.log | head -20 || true; tail -3 nextest.log; }
           if [ "${{ matrix.order }}" = test-first ]; then t; n; else n; t; fi
