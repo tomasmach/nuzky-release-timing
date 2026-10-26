@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["macos-14"]') || fromJSON('["ubuntu-24.04", "macos-14", "windows-2022"]') }}
+        os: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && fromJSON('["macos-14", "windows-2022"]') || fromJSON('["ubuntu-24.04", "macos-14", "windows-2022"]') }}
         # One after the other, clippy, the tests and the installers took 71 minutes on Windows, 33 on macOS and 27 on
         # Linux. On machines of their own a release waits only for the longest of them.
         part: [clippy, test, installers]
