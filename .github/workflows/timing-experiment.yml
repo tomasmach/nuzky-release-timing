@@ -1,0 +1,93 @@
+name: Timing experiment
+# Only in the timing fork: where do the builds spend their time, and what makes them faster?
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-2022, variant: baseline, what: test }
+          - { os: windows-2022, variant: nodebug, what: test }
+          - { os: windows-2022, variant: lld, what: test }
+          - { os: windows-2022, variant: nodefender, what: test }
+          - { os: windows-2022, variant: baseline, what: release }
+          - { os: windows-2022, variant: lld, what: release }
+          - { os: windows-2022, variant: baseline, what: clippy }
+          - { os: ubuntu-24.04, variant: baseline, what: test }
+          - { os: ubuntu-24.04, variant: nodebug, what: test }
+          - { os: ubuntu-24.04, variant: baseline, what: release }
+          - { os: macos-14, variant: baseline, what: test }
+          - { os: macos-14, variant: baseline, what: release }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+      - name: Install Rust
+        shell: bash
+        run: rustup update stable --no-self-update && rustup default stable && nproc 2>/dev/null || true
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/setup-ubuntu-deps.sh
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg ffmpeg-full pkg-config cmake
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "$(brew --prefix ffmpeg)/bin" >> "$GITHUB_PATH"
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup-windows-deps.ps1
+      - name: Defender and disk
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled | Format-List
+          Get-PSDrive C, D | Format-Table
+          if ('${{ matrix.variant }}' -eq 'nodefender') {
+            Set-MpPreference -DisableRealtimeMonitoring $true
+            Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled | Format-List
+          }
+      - name: Variant
+        shell: bash
+        run: |
+          case "${{ matrix.variant }}" in
+            nodebug) echo "CARGO_PROFILE_DEV_DEBUG=0" >> "$GITHUB_ENV"; echo "CARGO_PROFILE_DEV_BUILD_OVERRIDE_DEBUG=0" >> "$GITHUB_ENV" ;;
+            lld) echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=lld-link" >> "$GITHUB_ENV" ;;
+          esac
+      - run: npm ci
+      - run: node scripts/fetch-onnxruntime.mjs
+      - name: Clippy
+        if: matrix.what == 'clippy'
+        shell: bash
+        run: time cargo clippy --workspace --all-targets --locked --timings -- -D warnings
+      - name: Compile tests
+        if: matrix.what == 'test'
+        shell: bash
+        run: time cargo test --workspace --locked --no-run --timings
+      - name: Run tests
+        if: matrix.what == 'test'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"; fi
+          time cargo test --workspace --locked --no-fail-fast 2>&1 | tee test.log | grep -E 'Running|test result' || true
+          grep -q 'test result: FAILED' test.log && exit 1 || true
+      - name: Release build
+        if: matrix.what == 'release'
+        shell: bash
+        run: time cargo build --release --locked -p nuzky-app --timings
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: timings-${{ matrix.os }}-${{ matrix.variant }}-${{ matrix.what }}
+          path: target/cargo-timings/cargo-timing.html
