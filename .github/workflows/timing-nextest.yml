@@ -1,0 +1,74 @@
+name: Timing nextest
+# Only in the timing fork: cargo test against cargo nextest on the same machine and the same build.
+on:
+  push:
+    branches: [timing-nextest]
+permissions:
+  contents: read
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, ubuntu-24.04, macos-14]
+        order: [test-first, nextest-first]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: '22'
+      - name: Install Rust
+        shell: bash
+        run: rustup update stable --no-self-update && rustup default stable
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: bash scripts/setup-ubuntu-deps.sh
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg ffmpeg-full pkg-config cmake
+          echo "PKG_CONFIG_PATH=$(brew --prefix ffmpeg)/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "$(brew --prefix ffmpeg)/bin" >> "$GITHUB_PATH"
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/setup-windows-deps.ps1
+      - name: cargo-nextest
+        shell: bash
+        run: |
+          case "$RUNNER_OS" in
+            Windows) asset=x86_64-pc-windows-msvc.tar.gz sha=b7a8bf567140b8b366716f2dea27b32e088dc12f53597315f976d0dbf7c6ade8 ;;
+            macOS) asset=universal-apple-darwin.tar.gz sha=82a759b4d218d38359424196ab244c470e8f7c7d149c814fbbeef4d67c3c301a ;;
+            Linux) asset=x86_64-unknown-linux-musl.tar.gz sha=84f0f9ba75d0b6fa117bc418d49747ba78e20e4583057f6fa628f1b17c17234d ;;
+          esac
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/nextest.tar.gz" \
+            "https://github.com/nextest-rs/nextest/releases/download/cargo-nextest-0.9.150/cargo-nextest-0.9.150-$asset"
+          echo "$sha  $RUNNER_TEMP/nextest.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/nextest.tar.gz" -C "$HOME/.cargo/bin"
+          cargo nextest --version
+      - run: npm ci
+      - run: node scripts/fetch-onnxruntime.mjs
+      - name: Compile tests
+        shell: bash
+        run: |
+          time cargo test --workspace --locked --no-run
+          time cargo nextest run --workspace --locked --no-run
+      - name: Run both
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"; fi
+          t() { local s=$SECONDS; cargo test --workspace --locked --no-fail-fast > test.log 2>&1; echo "cargo test exit $? in $((SECONDS-s)) s"; grep -E 'test result: FAILED' -B2 test.log | grep Running || true; }
+          n() { local s=$SECONDS; cargo nextest run --workspace --locked --no-fail-fast > nextest.log 2>&1; echo "nextest exit $? in $((SECONDS-s)) s"; grep -E '^\s+(FAIL|SIGSEGV|TIMEOUT|SLOW)' nextest.log | head -20 || true; tail -3 nextest.log; }
+          if [ "${{ matrix.order }}" = test-first ]; then t; n; else n; t; fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: logs-${{ matrix.os }}-${{ matrix.order }}
+          path: |
+            test.log
+            nextest.log
