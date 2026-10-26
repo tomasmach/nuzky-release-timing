@@ -1,7 +1,8 @@
 name: Timing experiment
 # Only in the timing fork: where do the builds spend their time, and what makes them faster?
 on:
-  workflow_dispatch:
+  push:
+    branches: [timing-experiment]
 permissions:
   contents: read
 jobs:
